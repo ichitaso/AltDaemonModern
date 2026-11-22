@@ -1,34 +1,16 @@
 #import <Foundation/Foundation.h>
 #import <objc/runtime.h>
 #import <dispatch/dispatch.h>
+#import <sys/utsname.h>
 
-// 0: GSA and developer-services requests are rewritten to one coherent Mac identity
-//    (see below). Required with on-device anisette: Apple answers /services/v1/certificates
-//    with 403 FORBIDDEN_ERROR when the iPhone's own client info is sent.
+// 0: GSA and developer-services identities are rewritten (see AAMDataTaskWithRequest).
 // 1: pure logger; requests are not modified.
 #define AAM_LOG_ONLY 0
 
-// Client info used for every GSA request when AAM_LOG_ONLY is 0.
-// 1: legacy MacBookPro13,2 tuple (matched the old public anisette servers).
-// 2: Mac15,7 / macOS 15.7.9 tuple (the one observed from a working Mac AltServer run).
-#define AAM_IDENTITY 2
-
-// Same tuple for developerservices2.apple.com requests. It must match the GSA identity:
-// mixing an iPhone sign-in with a Mac developer-services request is answered with
-// "session expired" (AltStore error 1100).
-// 1: apply the override (working configuration). 0: leave AltSign's value untouched.
-#define AAM_DEV_IDENTITY 1
-#define AAM_DEV_CLIENT_INFO @"<Mac15,7> <Mac OS X;15.7.9;24G830> <com.apple.AuthKit/1 (com.apple.akd/1.0)>"
-
-#if AAM_IDENTITY == 1
-#define AAM_CLIENT_INFO @"<MacBookPro13,2> <Mac OS X;13.1;22C65> <com.apple.AuthKit/1 (com.apple.akd/1.0)>"
-#else
-#define AAM_CLIENT_INFO @"<Mac15,7> <Mac OS X;15.7.9;24G830> <com.apple.AuthKit/1 (com.apple.akd/1.0)>"
-#endif
-
-// The User-Agent AltSign sends (unmodified). It contains com.apple.dt.Xcode/26.0 and
-// is accepted; only X-MMe-Client-Info is filtered.
-#define AAM_USER_AGENT @"AuthKit/1 (Macintosh; OS X 26.5.2) (com.apple.dt.Xcode/26.0)"
+// Mac identity for the Xcode app token, developer services, and non-iOS anisette.
+// Mac15,7 / 15.7.9 has been rejected with ec=-22410 since 2026-11-21.
+#define AAM_MAC_CLIENT_INFO @"<MacBookAir10,1> <Mac OS X;27.3;26C5035r> <com.apple.AuthKit/1 (com.apple.akd/1.0)>"
+#define AAM_MAC_USER_AGENT @"akd/1.0 CFNetwork/3896.300.31 Darwin/27.3.0"
 
 typedef NSURLSessionDataTask *(*AAMDataTaskImplementation)(id,
                                                            SEL,
@@ -201,6 +183,14 @@ static NSURLSessionDataTask *AAMCreateRetryTask(id object,
     }
 }
 
+static BOOL AAMIsAppTokensRequest(NSURLRequest *request)
+{
+    if (request.HTTPBody == nil) return NO;
+    id plist = [NSPropertyListSerialization propertyListWithData:request.HTTPBody options:NSPropertyListImmutable format:NULL error:NULL];
+    NSDictionary *inner = [plist isKindOfClass:[NSDictionary class]] ? plist[@"Request"] : nil;
+    return [inner isKindOfClass:[NSDictionary class]] && [inner[@"o"] isEqual:@"apptokens"];
+}
+
 static NSURLSessionDataTask *AAMCreateAppleAuthenticationTask(id object,
                                                                SEL selector,
                                                                NSURLRequest *request,
@@ -298,6 +288,20 @@ static BOOL AAMIsDeveloperServicesRequest(NSURLRequest *request)
            [host hasSuffix:@".developerservices2.apple.com"];
 }
 
+// akd's User-Agent on this device, e.g. "akd/1.0 CFNetwork/3826.400.120 Darwin/24.3.0".
+static NSString *AAMNativeUserAgent(void)
+{
+    static NSString *userAgent;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        NSString *cfnetwork = [NSBundle bundleWithIdentifier:@"com.apple.CFNetwork"].infoDictionary[@"CFBundleVersion"] ?: @"3826.400.120";
+        struct utsname name;
+        NSString *darwin = uname(&name) == 0 ? @(name.release) : @"24.3.0";
+        userAgent = [NSString stringWithFormat:@"akd/1.0 CFNetwork/%@ Darwin/%@", cfnetwork, darwin];
+    });
+    return userAgent;
+}
+
 static NSURLSessionDataTask *AAMDataTaskWithRequest(id object,
                                                     SEL selector,
                                                     NSURLRequest *request,
@@ -305,9 +309,10 @@ static NSURLSessionDataTask *AAMDataTaskWithRequest(id object,
 {
     if (AAMIsDeveloperServicesRequest(request))
     {
-#if AAM_DEV_IDENTITY == 1
+#if !AAM_LOG_ONLY
+        // Must match the identity of the Xcode app token, or Apple answers 1100.
         NSMutableURLRequest *devRequest = [request mutableCopy];
-        [devRequest setValue:AAM_DEV_CLIENT_INFO forHTTPHeaderField:@"X-MMe-Client-Info"];
+        [devRequest setValue:AAM_MAC_CLIENT_INFO forHTTPHeaderField:@"X-MMe-Client-Info"];
         return AAMOriginalDataTaskImplementation(object, selector, devRequest, completionHandler);
 #else
         return AAMOriginalDataTaskImplementation(object, selector, request, completionHandler);
@@ -330,22 +335,28 @@ static NSURLSessionDataTask *AAMDataTaskWithRequest(id object,
 
     NSMutableURLRequest *updatedRequest = [request mutableCopy];
     NSString *originalClientInfo = [updatedRequest valueForHTTPHeaderField:@"X-MMe-Client-Info"];
-    BOOL hadCorrectClientInfo = [originalClientInfo containsString:@"com.apple.akd/1.0"];
+    BOOL nativeIdentity = [originalClientInfo containsString:@"<iPhone OS;"] || [originalClientInfo containsString:@"<iPadOS;"];
+    BOOL appTokens = AAMIsAppTokensRequest(request);
 
-    // AltStore 2.2.1 identifies the GSA request as a 2018 AuthKit client.
-    // Apple now rejects GSA requests identifying as Xcode. The client-info
-    // header is enforced here so the request cannot reuse that blocked token.
+    // Since 2026-11-21 GSA refuses SRP with ec=-22410 when the client info platform differs
+    // from the ADI that produced the OTP, so on-device (iOS) anisette keeps its own identity.
+    // The Xcode app token is refused for iOS (ec=-80046) and is still issued to a Mac identity.
 #if !AAM_LOG_ONLY
-    [updatedRequest setValue:AAM_USER_AGENT forHTTPHeaderField:@"User-Agent"];
-    [updatedRequest setValue:AAM_CLIENT_INFO forHTTPHeaderField:@"X-MMe-Client-Info"];
+    if (nativeIdentity && !appTokens)
+    {
+        [updatedRequest setValue:AAMNativeUserAgent() forHTTPHeaderField:@"User-Agent"];
+    }
+    else
+    {
+        [updatedRequest setValue:AAM_MAC_USER_AGENT forHTTPHeaderField:@"User-Agent"];
+        [updatedRequest setValue:AAM_MAC_CLIENT_INFO forHTTPHeaderField:@"X-MMe-Client-Info"];
+    }
 #endif
 
-    NSString *requestMessage = [NSString stringWithFormat:@"request path=%@ method=%@ correctedClientInfo=%@ headersOverridden=%@",
-                                updatedRequest.URL.path ?: @"(none)",
-                                updatedRequest.HTTPMethod ?: @"(none)",
-                                hadCorrectClientInfo ? @"yes" : @"no",
-                                AAM_LOG_ONLY ? @"no" : @"yes"];
-    AAMAppendDiagnostic(requestMessage);
+    AAMAppendDiagnostic([NSString stringWithFormat:@"request path=%@ op=%@ identity=%@",
+                         updatedRequest.URL.path ?: @"(none)",
+                         appTokens ? @"apptokens" : @"auth",
+                         [updatedRequest valueForHTTPHeaderField:@"X-MMe-Client-Info"] ?: @"(none)"]);
 
     return AAMCreateAppleAuthenticationTask(object, selector, updatedRequest, completionHandler, 0);
 }
@@ -373,7 +384,7 @@ static void AAMInitialize(void)
             method_setImplementation(class_getInstanceMethod(sessionClass, selector), (IMP)AAMDataTaskWithRequest);
         }
 
-        AAMAppendDiagnostic([NSString stringWithFormat:@"loaded build=native-macosx in %@ sessionClass=%@",
+        AAMAppendDiagnostic([NSString stringWithFormat:@"loaded build=native-ios in %@ sessionClass=%@",
                              NSBundle.mainBundle.bundleIdentifier ?: @"(unknown)",
                              NSStringFromClass(sessionClass)]);
         [probeSession invalidateAndCancel];

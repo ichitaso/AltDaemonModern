@@ -1,8 +1,8 @@
 # AltDaemonModern
 
-This fork repairs AltDaemon for rootless and Dopamine RootHide jailbreaks. Version 1.2.3 tries on-device AuthKit anisette first and retains the anisette v3 client as fallback. It preserves AltStore's existing XPC protocol, so compatible AltStore Classic builds do not need a protocol change.
+This fork repairs AltDaemon for rootless and Dopamine RootHide jailbreaks. Version 1.2.4 tries on-device AuthKit anisette first and retains the anisette v3 client as fallback. It preserves AltStore's existing XPC protocol, so compatible AltStore Classic builds do not need a protocol change.
 
-Thanks to [ichitaso](https://github.com/ichitaso/AltDaemonModern) for the on-device anisette and authentication/retry fixes in 1.2.2, and the HTTP 503 fix and RootHide package in 1.2.3. See the [release notes](../RELEASE_NOTES_1.2.3.md) for validation details.
+Thanks to [ichitaso](https://github.com/ichitaso/AltDaemonModern) for the on-device anisette and authentication/retry fixes in 1.2.2, the HTTP 503 fix and RootHide package in 1.2.3, and the -22410 fix in 1.2.4. See the [release notes](../RELEASE_NOTES_1.2.4.md) for validation details.
 
 ## What changed
 
@@ -19,6 +19,10 @@ Thanks to [ichitaso](https://github.com/ichitaso/AltDaemonModern) for the on-dev
   and developer-services requests. Since 2026-11-20 Apple's GSA edge answers
   HTTP 503 when the OS name is `macOS;`, so 1.2.3 sends `Mac OS X;` and rewrites
   `<macOS;` in any other GSA request.
+- Since 2026-11-21 GSA answers -22410 when the client-info platform differs from
+  the ADI that produced the anisette data. With on-device anisette, 1.2.4 keeps
+  the device's own client info and akd User-Agent for SRP sign-in, and uses a
+  Mac identity only for the Xcode app token and developer services.
 - Includes an AltStore-only compatibility module for Classic 2.2.1 that updates
   its obsolete GSA authentication identity to `com.apple.akd`, retries transient
   Apple HTTP 429/5xx responses with bounded backoff, and reports an accurate

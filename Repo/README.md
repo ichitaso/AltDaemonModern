@@ -13,7 +13,7 @@ Run from the repository root:
 
 ```sh
 # Reuse the AltDaemon binary from an existing package (when the daemon source is unchanged)
-scripts/build-repo-debs.sh Repo/com.ichitaso.altdaemon_1.2.2_iphoneos-arm64.deb
+scripts/build-repo-debs.sh Repo/com.ichitaso.altdaemon_1.2.3_iphoneos-arm64.deb
 
 # Use an AltDaemon binary you built
 scripts/build-repo-debs.sh /path/to/AltDaemon

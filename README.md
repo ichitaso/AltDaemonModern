@@ -3,7 +3,7 @@
 > [!IMPORTANT]
 > This fork contains **AltDaemonModern**, a source-level repair for rootless and RootHide jailbreaks with on-device AuthKit anisette and anisette v3 fallback. See the [AltDaemonModern documentation](AltDaemon/README.md) for scope, build instructions, security notes, and device-testing guidance. The installed daemon is never modified by the build scripts.
 
-**[AltDaemon Modern 1.2.3](https://github.com/emp0ry/AltDaemonModern/releases/tag/v1.2.3)** fixes the HTTP 503 that Apple began returning on 2026-11-20 for AltStore sign-in and refresh, and adds a Dopamine RootHide package. See the [release notes](RELEASE_NOTES_1.2.3.md) for details and the tested configurations.
+**[AltDaemon Modern 1.2.4](https://github.com/ichitaso/AltDaemonModern/releases/tag/v1.2.4)** fixes error -22410 that Apple began returning on 2026-11-21 for AltStore sign-in and refresh. See the [release notes](RELEASE_NOTES_1.2.4.md) for details and the tested configurations.
 
 > AltStore is an alternative app store for non-jailbroken iOS devices. 
 
